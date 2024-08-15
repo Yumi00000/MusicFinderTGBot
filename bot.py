@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 
@@ -23,22 +24,40 @@ bot = AsyncTeleBot(bot_token)
 spotify_credentials = SpotifyClientCredentials(client_id=spotify_client_id, client_secret=spotify_client_secret)
 spotify = Spotify(client_credentials_manager=spotify_credentials)
 
+# File to store user and track information
+data_file = 'data.json'
 
 class FindMusic:
     @staticmethod
-    async def get_track_info(track):
-        track_name = track['name']
-        artist = track['artists'][0]['name']
-        song_page = track['external_urls']['spotify']
-        response = f"Track: {track_name}, Artist: {artist}, Song: {song_page}"
-        return response
+    async def get_track_info(tracks):
+        if isinstance(tracks, dict):
+            track_name = tracks['name']
+            artist = tracks['artists'][0]['name']
+            song_page = tracks['external_urls']['spotify']
+            response = f"Track: {track_name}\nArtist: {artist}\nLink: {song_page}"
+            return response
+        else:
+            raise ValueError("Expected 'track' to be a dictionary")
 
     @staticmethod
     async def search_track(query):
-        search_results = spotify.search(q=query, type='track')
-        if len(search_results['tracks']['items']) == 0:
+        search_results = spotify.search(q=query, type='track', limit=10)
+        tracks = search_results['tracks']['items']
+        if not tracks:
             return None
-        return search_results['tracks']['items'][0]
+        return tracks
+
+    @staticmethod
+    def load_data():
+        if os.path.exists(data_file):
+            with open(data_file, 'r') as file:
+                return json.load(file)
+        return {}
+
+    @staticmethod
+    def save_data(data):
+        with open(data_file, 'w') as file:
+            json.dump(data, file, indent=4)
 
 
 class Keyboard:
@@ -58,7 +77,6 @@ class Keyboard:
         return keyboard
 
     async def _handle_next(self, call):
-        logging.info(f"Handling next for call: {call}")
         self.current_index += 1
         if self.current_index >= len(self.tracks):
             self.current_index = len(self.tracks) - 1
@@ -67,7 +85,6 @@ class Keyboard:
         await self._edit_track_info(call)
 
     async def _handle_previous(self, call):
-        logging.info(f"Handling previous for call: {call}")
         self.current_index -= 1
         if self.current_index < 0:
             self.current_index = 0
@@ -75,12 +92,11 @@ class Keyboard:
             return
         await self._edit_track_info(call)
 
-    async def _handle_back(self, call):
-        logging.info(f"Handling back for call: {call}")
+    @staticmethod
+    async def _handle_back(call):
         await bot.delete_message(call.message.chat.id, call.message.message_id)
 
     async def _edit_track_info(self, call):
-        logging.info(f"Editing track info for call: {call}")
         track_info = await FindMusic.get_track_info(self.tracks[self.current_index])
         await bot.edit_message_text(
             chat_id=call.message.chat.id,
@@ -93,6 +109,7 @@ class Keyboard:
 class ConvertMusic(Keyboard):
     def __init__(self):
         super().__init__()
+        self.user_data = FindMusic.load_data()  # Load user data when initializing the class
 
     @staticmethod
     async def convertor(qname, getting_file, content_type):
@@ -140,10 +157,17 @@ class ConvertMusic(Keyboard):
                 await bot.send_message(message.chat.id, "No tracks found")
                 return
 
-            track_info = await FindMusic().get_track_info(self.tracks)
+            track_info = await FindMusic.get_track_info(self.tracks[self.current_index])
             await bot.send_message(message.chat.id, track_info, reply_markup=self._create_keyboard())
         else:
             await bot.send_message(message.chat.id, "Could not identify the song")
+
+        # Update user data
+        self.user_data[str(message.chat.id)] = {
+            'query': self.query,
+            'tracks': [await FindMusic.get_track_info(track) for track in (self.tracks or [])]
+        }
+        FindMusic.save_data(self.user_data)
 
     async def handle_callback_query(self, call):
         logging.info(f"Received callback query: {call.data}")
@@ -153,11 +177,13 @@ class ConvertMusic(Keyboard):
             await self._handle_previous(call)
         elif call.data == 'back':
             await self._handle_back(call)
+        else:
+            await bot.answer_callback_query(call.id, text='Unknown action')
+
 
 
 # Create an instance of ConvertMusic
 convert_music = ConvertMusic()
-
 
 # Register message and callback query handlers with the bot
 @bot.message_handler(content_types=['voice', 'video'])
