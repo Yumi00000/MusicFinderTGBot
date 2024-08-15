@@ -95,6 +95,7 @@ class Keyboard:
     @staticmethod
     async def _handle_back(call):
         await bot.delete_message(call.message.chat.id, call.message.message_id)
+        await bot.delete_message(call.message.chat.id, call.message.message_id-1)
 
     async def _edit_track_info(self, call):
         track_info = await FindMusic.get_track_info(self.tracks[self.current_index])
